@@ -212,6 +212,11 @@
     <p class="lead"><code>ld_maker</code> builds that geometry as a ready-to-simulate structure. It reuses single-molecule conformations from your own equilibrated systems, writes a matching GROMACS topology, and hands off to the standard six-stage equilibration — no from-scratch solvation, no hand-editing coordinate files.</p>
   </section>
 
+  <div class="figure">
+    <img src="img/bilayer_to_ld.png" alt="A POPC/DOPE bilayer converted to a lipid droplet: the two leaflets split apart and a TRIO core fills the middle." style="width:100%;height:auto;display:block;border-radius:12px;background:#fff">
+    <div class="cap">The recommended route in action: a solvated POPC/DOPE bilayer (left) becomes a lipid droplet (right) — the leaflets separate and TRIO fills the core. Water and ions hidden for clarity.</div>
+  </div>
+
   <section>
     <p class="eyebrow">Two ways to build</p>
     <h2>Start from a bilayer, or from scratch.</h2>
@@ -272,6 +277,14 @@
           <tr><td>Trajectory written for inspection</td><td class="num">51 frames · 20 ps</td></tr>
         </tbody>
       </table>
+    </div>
+    <div class="figure">
+      <img src="img/minimization_before_after.png" alt="Cross-section of the droplet before and after energy minimization." style="width:100%;height:auto;display:block;border-radius:12px;background:#fff">
+      <div class="cap">Energy minimization relaxes the loose grid start (left) into clean interfaces (right) — the trilayer holds, no blow-up.</div>
+    </div>
+    <div class="figure">
+      <img src="img/validation_zprofile.png" alt="z-density profile of the lipid droplet." style="width:100%;height:auto;display:block;border-radius:12px;background:#fff">
+      <div class="cap">z-density profile: two sharp phosphate head peaks (black) flank the TRIO core (orange) — the lipid-droplet signature.</div>
     </div>
   </section>
 
