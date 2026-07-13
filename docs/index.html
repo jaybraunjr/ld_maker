@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ld_maker — lipid droplet builder for CHARMM36 MD</title>
+<style>
+  :root {
+    --bg: #eef0f2;
+    --surface: #ffffff;
+    --surface-2: #f6f7f9;
+    --ink: #171a20;
+    --muted: #5c636e;
+    --faint: #8a919c;
+    --line: #dfe3e8;
+    --accent: #c96a06;        /* oleic amber — the neutral-lipid core */
+    --accent-ink: #a1560a;
+    --accent-soft: #f6e7d2;
+    --aq: #2b7fa6;            /* aqueous / phosphate */
+    --aq-soft: #dbeaf1;
+    --good: #2f8f5b;
+    --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    --maxw: 46rem;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1116;
+      --surface: #161a21;
+      --surface-2: #1b2029;
+      --ink: #e7eaee;
+      --muted: #9aa2ae;
+      --faint: #6b7480;
+      --line: #272d37;
+      --accent: #ef9d3f;
+      --accent-ink: #f0a751;
+      --accent-soft: #2a2114;
+      --aq: #5aa8cc;
+      --aq-soft: #16242c;
+      --good: #58b982;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #eef0f2; --surface: #ffffff; --surface-2: #f6f7f9; --ink: #171a20;
+    --muted: #5c636e; --faint: #8a919c; --line: #dfe3e8; --accent: #c96a06;
+    --accent-ink: #a1560a; --accent-soft: #f6e7d2; --aq: #2b7fa6; --aq-soft: #dbeaf1; --good: #2f8f5b;
+  }
+  :root[data-theme="dark"] {
+    --bg: #0e1116; --surface: #161a21; --surface-2: #1b2029; --ink: #e7eaee;
+    --muted: #9aa2ae; --faint: #6b7480; --line: #272d37; --accent: #ef9d3f;
+    --accent-ink: #f0a751; --accent-soft: #2a2114; --aq: #5aa8cc; --aq-soft: #16242c; --good: #58b982;
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: var(--font-sans); line-height: 1.65;
+    font-size: 16px; -webkit-font-smoothing: antialiased;
+  }
+  .page { max-width: var(--maxw); margin: 0 auto; padding: 0 1.4rem 5rem; }
+
+  /* ---- header ---- */
+  header.top { padding: 3.2rem 0 1.2rem; }
+  .wordmark {
+    font-family: var(--font-mono); font-size: 1.9rem; font-weight: 600;
+    letter-spacing: -0.02em; margin: 0; display: flex; align-items: baseline; gap: .1rem;
+  }
+  .wordmark .dot { color: var(--accent); }
+  .tagline { font-size: 1.12rem; color: var(--muted); margin: .5rem 0 1rem; max-width: 34rem; }
+  .meta {
+    display: flex; flex-wrap: wrap; gap: .5rem; font-family: var(--font-mono);
+    font-size: .74rem; letter-spacing: .02em;
+  }
+  .meta span {
+    border: 1px solid var(--line); border-radius: 100px; padding: .2rem .6rem;
+    color: var(--muted); background: var(--surface);
+  }
+
+  /* ---- hero diagram ---- */
+  .hero {
+    margin: 1.8rem 0 2.4rem; background: var(--surface); border: 1px solid var(--line);
+    border-radius: 14px; padding: 1.2rem 1rem .8rem; overflow: hidden;
+  }
+  .hero svg { display: block; width: 100%; height: auto; }
+  .hero .cap {
+    font-family: var(--font-mono); font-size: .72rem; color: var(--faint);
+    text-align: center; margin-top: .5rem; letter-spacing: .03em;
+  }
+
+  /* ---- sections ---- */
+  section { margin: 2.6rem 0; }
+  .eyebrow {
+    font-family: var(--font-mono); font-size: .72rem; text-transform: uppercase;
+    letter-spacing: .16em; color: var(--accent-ink); margin: 0 0 .5rem;
+  }
+  h2 { font-size: 1.5rem; letter-spacing: -0.01em; margin: 0 0 .8rem; text-wrap: balance; }
+  h3 { font-size: 1.04rem; margin: 0 0 .3rem; letter-spacing: -0.005em; }
+  p { margin: 0 0 1rem; }
+  p.lead { max-width: 40rem; }
+  a { color: var(--accent-ink); text-underline-offset: 2px; }
+  strong { font-weight: 640; }
+
+  /* ---- mode cards ---- */
+  .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 620px) { .cards { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+    padding: 1.1rem 1.1rem 1.2rem; display: flex; flex-direction: column; gap: .1rem;
+  }
+  .card .tag {
+    font-family: var(--font-mono); font-size: .68rem; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--accent); margin-bottom: .35rem;
+  }
+  .card p { font-size: .94rem; color: var(--muted); margin: .2rem 0 0; }
+
+  /* ---- code ---- */
+  .code {
+    background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px;
+    font-family: var(--font-mono); font-size: .82rem; line-height: 1.7;
+    padding: .95rem 1.05rem; overflow-x: auto; margin: 0 0 1rem; color: var(--ink);
+  }
+  .code .c { color: var(--faint); }        /* comment */
+  .code .k { color: var(--accent-ink); }    /* command / keyword */
+  .code .v { color: var(--aq); }            /* value / path */
+  .code pre { margin: 0; white-space: pre; }
+
+  /* ---- pipeline stages ---- */
+  .stages { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0; }
+  .stage {
+    display: grid; grid-template-columns: 2.1rem 1fr; gap: .9rem;
+    padding: 1rem 0; border-top: 1px solid var(--line);
+  }
+  .stage:first-child { border-top: none; }
+  .stage .n {
+    font-family: var(--font-mono); font-size: .82rem; font-weight: 600;
+    color: var(--accent); border: 1px solid var(--line); border-radius: 8px;
+    height: 2.1rem; display: grid; place-items: center; background: var(--surface);
+  }
+  .stage h3 { margin-bottom: .2rem; }
+  .stage p { font-size: .92rem; color: var(--muted); margin: 0; }
+  .stage code, p code, li code {
+    font-family: var(--font-mono); font-size: .82em; background: var(--surface-2);
+    border: 1px solid var(--line); border-radius: 5px; padding: .05rem .35rem;
+  }
+
+  /* ---- table ---- */
+  .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+  th, td { text-align: left; padding: .7rem .95rem; border-bottom: 1px solid var(--line); }
+  thead th {
+    font-family: var(--font-mono); font-size: .7rem; text-transform: uppercase;
+    letter-spacing: .1em; color: var(--faint); font-weight: 600;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  td.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .ok { color: var(--good); font-weight: 600; }
+  td .unit { color: var(--faint); }
+
+  /* ---- callout ---- */
+  .note {
+    border: 1px solid var(--line); border-left: 3px solid var(--accent);
+    background: var(--surface); border-radius: 0 10px 10px 0; padding: .9rem 1.1rem;
+    font-size: .92rem; color: var(--muted);
+  }
+  .note strong { color: var(--ink); }
+
+  /* ---- file grid ---- */
+  .files { display: grid; grid-template-columns: 1fr; gap: 0; }
+  .file {
+    display: grid; grid-template-columns: 11rem 1fr; gap: 1rem; padding: .55rem 0;
+    border-top: 1px solid var(--line); font-size: .9rem;
+  }
+  .file:first-child { border-top: none; }
+  .file .fn { font-family: var(--font-mono); font-size: .82rem; color: var(--accent-ink); }
+  .file .fd { color: var(--muted); }
+  @media (max-width: 560px) { .file { grid-template-columns: 1fr; gap: .1rem; } }
+
+  footer.foot {
+    margin-top: 3.5rem; padding-top: 1.4rem; border-top: 1px solid var(--line);
+    font-size: .82rem; color: var(--faint); font-family: var(--font-mono);
+    display: flex; justify-content: space-between; flex-wrap: wrap; gap: .5rem;
+  }
+
+  a:focus-visible, .card:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+
+  main { animation: rise .5s ease both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { main { animation: none; } }
+</style>
+</head>
+<body>
+
+<div class="page">
+  <header class="top">
+    <h1 class="wordmark">ld_maker<span class="dot">.</span></h1>
+    <p class="tagline">Build lipid-droplet starting structures for all-atom MD — then minimize and equilibrate them with the CHARMM-GUI protocol you already use.</p>
+    <div class="meta">
+      <span>CHARMM36</span><span>GROMACS</span><span>MDAnalysis</span><span>TRIO core</span><span>POPC · DOPE · SAPI</span>
+    </div>
+  </header>
+
+  <div class="hero">
+    <svg id="scheme" viewBox="0 0 760 300" role="img"
+         aria-label="A phospholipid bilayer converted into a lipid droplet by inserting a TRIO core between the leaflets."></svg>
+    <div class="cap">insert TRIO between the leaflets of a bilayer → lipid-droplet trilayer</div>
+  </div>
+
+  <section>
+    <p class="eyebrow">What it is</p>
+    <h2>A lipid droplet is a phospholipid monolayer wrapped around a neutral-lipid core.</h2>
+    <p class="lead"><code>ld_maker</code> builds that geometry as a ready-to-simulate structure. It reuses single-molecule conformations from your own equilibrated systems, writes a matching GROMACS topology, and hands off to the standard six-stage equilibration — no from-scratch solvation, no hand-editing coordinate files.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow">Two ways to build</p>
+    <h2>Start from a bilayer, or from scratch.</h2>
+    <div class="cards">
+      <div class="card">
+        <span class="tag">recommended</span>
+        <h3>Bilayer → LD</h3>
+        <p>Take a solvated CHARMM-GUI bilayer, pry the two leaflets apart, and fill the midplane with TRIO. The bilayer's water and ions stay exactly where they are. <strong>Composition-agnostic</strong> — build cholesterol or a mixed phospholipid bilayer in CHARMM-GUI and it carries straight through.</p>
+      </div>
+      <div class="card">
+        <span class="tag">from scratch</span>
+        <h3>Grid build</h3>
+        <p>Synthesize the whole monolayer / core / monolayer sandwich on a grid from single-molecule templates, with a rigid-body clash relaxation. Lipids and core only — solvate downstream. Handy for quick phospholipid-only variants.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Quick start</p>
+    <h2>One command, start to finish.</h2>
+    <p>Build the droplet, stage a self-contained run directory (coordinates, topology, index, protocol, force field), and minimize:</p>
+    <div class="code"><pre><span class="c"># insert 150 TRIO into a bilayer, stage everything, run minimization</span>
+<span class="k">bash</span> ld_maker/pipeline.sh <span class="v">modules/move_prot/drude/bil/bil.gro</span> <span class="v">150</span> <span class="v">runs/ld1</span> --minimize</pre></div>
+    <p>Then equilibrate — locally or on the cluster:</p>
+    <div class="code"><pre><span class="k">cd</span> runs/ld1
+<span class="k">bash</span> run_equil.sh        <span class="c"># local (CPU)</span>
+<span class="k">sbatch</span> run_equil.slurm    <span class="c"># CHPC GPU — finishes in under an hour</span></pre></div>
+    <p style="font-size:.9rem;color:var(--muted)">Prefer the library directly? <code>ld_maker.bilayer_to_ld(bilayer, n_trio, out_gro, out_top)</code> in Python, or <code>python&nbsp;-m&nbsp;ld_maker&nbsp;--bilayer&nbsp;…</code> on the command line.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow">The pipeline</p>
+    <h2>Five stages from bilayer to droplet.</h2>
+    <ol class="stages">
+      <li class="stage"><span class="n">1</span><div><h3>Build</h3><p>Insert TRIO between the leaflets (or grid-build the trilayer). A loose initial core keeps the start clash-light; the box compresses later under pressure coupling.</p></div></li>
+      <li class="stage"><span class="n">2</span><div><h3>Stage</h3><p>Write <code>topol.top</code> (molecule counts in file order), an <code>index.ndx</code> with SOLU / MEMB / SOLV groups, and copy the CHARMM36 <code>toppar</code> and step6/step7 <code>.mdp</code> files.</p></div></li>
+      <li class="stage"><span class="n">3</span><div><h3>Minimize</h3><p>Steepest descent (<code>step6.0</code>) with position restraints on the lipid phosphates. Resolves the grid contacts before any dynamics.</p></div></li>
+      <li class="stage"><span class="n">4</span><div><h3>Equilibrate</h3><p>Six stages, <code>step6.1 → step6.6</code>: NVT then semi-isotropic NPT, with the lipid restraint ramped <strong>400 → 0</strong> kJ·mol⁻¹·nm⁻² as the core densifies.</p></div></li>
+      <li class="stage"><span class="n">5</span><div><h3>Produce</h3><p>Launch production (<code>step7</code>) from the equilibrated <code>step6.6.gro</code>.</p></div></li>
+    </ol>
+    <div class="note" style="margin-top:.4rem"><strong>Why the box holds its height early:</strong> the phosphate restraint is <em>z-only</em> (fx = fy = 0), so lipids diffuse laterally while the leaflets stay put. The core compresses only once that restraint is released over stages 6.4–6.6.</div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Validation</p>
+    <h2>It builds clean and runs stable.</h2>
+    <p class="lead">Verified on a POPC/DOPE bilayer (71,412 atoms) → lipid droplet (96,462 atoms), GROMACS 2022.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Check</th><th>Result</th></tr></thead>
+        <tbody>
+          <tr><td>Water in the hydrophobic core after insertion</td><td class="num"><span class="ok">0</span></td></tr>
+          <tr><td>Min. inter-molecular contact (loose core)</td><td class="num">0.57 <span class="unit">Å</span></td></tr>
+          <tr><td>Energy minimization</td><td class="num"><span class="ok">converged</span> · Fmax&lt;1000 in 576 steps</td></tr>
+          <tr><td>Potential energy after minimization</td><td class="num">−6.67×10⁵ <span class="unit">kJ/mol</span></td></tr>
+          <tr><td>NVT + NPT (10 ps): constraint failures</td><td class="num"><span class="ok">none</span></td></tr>
+          <tr><td>Temperature through equilibration</td><td class="num">≈ 303 <span class="unit">K</span></td></tr>
+          <tr><td>Trajectory written for inspection</td><td class="num">51 frames · 20 ps</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Package</p>
+    <h2>What's in it.</h2>
+    <div class="files">
+      <div class="file"><span class="fn">bilayer.py</span><span class="fd">insert a TRIO core between a bilayer's leaflets</span></div>
+      <div class="file"><span class="fn">builder.py</span><span class="fd">from-scratch grid build (PlanarLDBuilder)</span></div>
+      <div class="file"><span class="fn">templates.py</span><span class="fd">extract compact single-molecule templates</span></div>
+      <div class="file"><span class="fn">relax.py</span><span class="fd">rigid-body clash relaxation</span></div>
+      <div class="file"><span class="fn">topology.py</span><span class="fd">GROMACS [ molecules ] / .top generation</span></div>
+      <div class="file"><span class="fn">index.py</span><span class="fd">SOLU / MEMB / SOLV index.ndx generator</span></div>
+      <div class="file"><span class="fn">pipeline.sh</span><span class="fd">one-command build → stage → minimize</span></div>
+      <div class="file"><span class="fn">equil/run_equil.sh · .slurm</span><span class="fd">six-stage equilibration, local or CHPC GPU</span></div>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Running the dynamics</p>
+    <h2>Local for setup, cluster for the run.</h2>
+    <p class="lead">On CPU this system runs ~1 ns/day, so the full ~1.5 ns equilibration takes about a day and a half locally — fine for a smoke test, slow for real work. On a CHPC GPU node it finishes in under an hour. The generated <code>run_equil.slurm</code> targets <code>swanson-gpu-np</code>; set the GROMACS module name and submit.</p>
+    <div class="note"><strong>Adding cholesterol or new lipids?</strong> Build the bilayer with them in CHARMM-GUI, then convert with bilayer mode. The insertion never inspects the leaflet composition, so sterols and mixed phospholipids just work — no packing code to trust.</div>
+  </section>
+
+  <footer class="foot">
+    <span>ld_maker · CytoLD</span>
+    <span>CHARMM36 · GROMACS 2022 · MDAnalysis 2.7</span>
+  </footer>
+</div>
+
+<script>
+  (function () {
+    var svg = document.getElementById("scheme");
+    var SVGNS = "http://www.w3.org/2000/svg";
+    function v(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+    function el(tag, attrs) {
+      var e = document.createElementNS(SVGNS, tag);
+      for (var k in attrs) e.setAttribute(k, attrs[k]);
+      return e;
+    }
+
+    function leaflet(g, x0, x1, y, dir, headC, tailC) {
+      // dir = +1 tails go down, -1 tails go up. draw ~14 lipids across.
+      var n = 15, span = x1 - x0, step = span / (n - 1);
+      for (var i = 0; i < n; i++) {
+        var x = x0 + i * step;
+        g.appendChild(el("circle", { cx: x, cy: y, r: 3.4, fill: headC }));
+        g.appendChild(el("line", { x1: x, y1: y, x2: x, y2: y + dir * 34,
+          stroke: tailC, "stroke-width": 2.2, "stroke-linecap": "round" }));
+      }
+    }
+
+    function panel(x0, x1, opts) {
+      var g = el("g", {});
+      var aq = v("--aq"), head = v("--ink"), tail = v("--muted"),
+          core = v("--accent"), aqsoft = v("--aq-soft");
+      var w = x1 - x0;
+      // water bands
+      g.appendChild(el("rect", { x: x0, y: opts.topWaterY, width: w, height: 26, rx: 4, fill: aqsoft }));
+      g.appendChild(el("rect", { x: x0, y: opts.botWaterY, width: w, height: 26, rx: 4, fill: aqsoft }));
+      // upper leaflet (heads at upTop, tails downward)
+      leaflet(g, x0 + 10, x1 - 10, opts.upHead, +1, head, tail);
+      // lower leaflet (heads at loHead, tails upward)
+      leaflet(g, x0 + 10, x1 - 10, opts.loHead, -1, head, tail);
+      // core (LD only)
+      if (opts.core) {
+        var cy = (opts.upHead + 34 + (opts.loHead - 34)) / 2;
+        var ch = (opts.loHead - 34) - (opts.upHead + 34);
+        g.appendChild(el("rect", { x: x0, y: opts.upHead + 34, width: w, height: ch, rx: 6,
+          fill: core, opacity: 0.16 }));
+        // core blobs
+        var blobs = 22;
+        for (var i = 0; i < blobs; i++) {
+          var bx = x0 + 12 + Math.random() * (w - 24);
+          var by = opts.upHead + 40 + Math.random() * (ch - 12);
+          g.appendChild(el("circle", { cx: bx, cy: by, r: 3.1, fill: core, opacity: 0.85 }));
+        }
+      }
+      return g;
+    }
+
+    function label(x, y, text, color, anchor) {
+      var t = el("text", { x: x, y: y, fill: color, "text-anchor": anchor || "middle",
+        "font-family": "ui-monospace, Menlo, monospace", "font-size": "12", "letter-spacing": "0.06em" });
+      t.textContent = text;
+      return t;
+    }
+
+    function draw() {
+      svg.innerHTML = "";
+      var ink = v("--ink"), accent = v("--accent"), faint = v("--faint");
+      // left: bilayer  (tails meet in the middle)
+      svg.appendChild(panel(40, 320, {
+        topWaterY: 20, botWaterY: 254, upHead: 78, loHead: 208, core: false
+      }));
+      // right: lipid droplet (leaflets pushed apart, core between)
+      svg.appendChild(panel(440, 720, {
+        topWaterY: 12, botWaterY: 262, upHead: 60, loHead: 226, core: true
+      }));
+      svg.appendChild(label(180, 292, "bilayer", faint));
+      svg.appendChild(label(580, 292, "lipid droplet", accent));
+      // arrow
+      var ar = el("g", {});
+      ar.appendChild(el("line", { x1: 348, y1: 150, x2: 408, y2: 150, stroke: accent, "stroke-width": 2 }));
+      ar.appendChild(el("path", { d: "M408 150 l-9 -5 v10 z", fill: accent }));
+      ar.appendChild(label(378, 138, "+TRIO", accent));
+      svg.appendChild(ar);
+    }
+
+    draw();
+    // redraw on theme change so SVG colors track the tokens
+    var mo = new MutationObserver(draw);
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    if (window.matchMedia) {
+      try { window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", draw); } catch (e) {}
+    }
+  })();
+</script>
+</body>
+</html>
