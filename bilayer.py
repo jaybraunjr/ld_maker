@@ -17,6 +17,10 @@ PL monolayer, ready for the standard minimization + equilibration pipeline.
 """
 
 import os
+import re
+import shutil
+import subprocess
+import tempfile
 
 import numpy as np
 import MDAnalysis as mda
@@ -58,6 +62,8 @@ def insert_core_into_bilayer(
     seed=0,
     relax=True,
     d_min=1.6,
+    method="auto",
+    insert_scale=0.5,
 ):
     """Insert a neutral-lipid core between a bilayer's leaflets.
 
@@ -97,6 +103,11 @@ def insert_core_into_bilayer(
     if core_source is None:
         core_source = DEFAULT_CORE_SOURCE
 
+    # rigid sterols (CHYO) or any multi-species mix pack far more reliably with
+    # gmx insert-molecules; single-species TRIO cores use the fast grid path
+    use_insert = method == "insert" or (
+        method == "auto" and (len(core) > 1 or any(sp != "TRIO" for sp in core)))
+
     u = bilayer if isinstance(bilayer, mda.Universe) else mda.Universe(bilayer)
     # make molecules whole and inside the box so leaflet/water assignment is clean
     u.atoms.wrap(compound="residues")
@@ -107,7 +118,9 @@ def insert_core_into_bilayer(
 
     if core_thickness is None:
         vol = sum(n * CORE_VOLUME_A3.get(sp, TRIO_VOLUME_A3) for sp, n in core.items())
-        core_thickness = vol / (area * packing_fraction)
+        # insert-molecules needs a roomier gap to place every molecule
+        pf = min(packing_fraction, 0.25) if use_insert else packing_fraction
+        core_thickness = vol / (area * pf)
     t = float(core_thickness)
 
     # --- assign every residue to the top or bottom half by its COM z, then
@@ -119,9 +132,20 @@ def insert_core_into_bilayer(
     top_atoms.positions += np.array([0.0, 0.0, +t / 2.0])
     bot_atoms.positions += np.array([0.0, 0.0, -t / 2.0])
 
-    # --- place the core species on a shared jittered 3-D grid in the gap ---
     templates = extract_templates(core_source, list(core.keys()), align_axis=True)
     rng = np.random.default_rng(seed)
+
+    if use_insert:
+        # grow + center the box so the gap is a clean insertion volume, then let
+        # gmx insert-molecules pack it (guaranteed no overlaps)
+        grown = box.copy()
+        grown[2] += t
+        u.dimensions = grown
+        u.atoms.translate([0.0, 0.0, grown[2] / 2.0 - center])
+        core_mols = _pack_core_gmx(u, core, templates, scale=insert_scale)
+        return _merge_bilayer_and_core(u, core_mols, box, t)
+
+    # --- otherwise place the core on a shared jittered 3-D grid in the gap ---
     lateral_span = max(float(max((tpl.positions.max(0) - tpl.positions.min(0))[:2]))
                        for tpl in templates.values())
     z_span = max(float((tpl.positions.max(0) - tpl.positions.min(0))[2])
@@ -142,16 +166,33 @@ def insert_core_into_bilayer(
     slots = [(i, j, k) for k in range(nz) for j in range(ny) for i in range(nx)]
     rng.shuffle(slots)
 
+    # Rejection sampling: place each molecule with the rotation that best avoids
+    # already-placed atoms. Rigid relaxation can't un-thread interlocked sterol
+    # rings, so we simply never create the interlock. Seed the occupancy with the
+    # leaflet atoms bordering the gap so the core also avoids the tails.
+    from scipy.spatial import cKDTree
+    border = (u.atoms.positions[:, 2] > z_lo - 4) & (u.atoms.positions[:, 2] < z_hi + 4)
+    placed = u.atoms.positions[border].astype(np.float32)
+    accept, tries = 2.0, 25
+
     core_mols = []  # (resname, names, coords)
     for (i, j, k), sp in zip(slots[:n_total], species_bag):
         tpl = templates[sp]
-        coords = tpl.randomly_rotated(rng)
-        centre = np.array([
-            (i + 0.5) * sx + rng.uniform(-jit, jit),
-            (j + 0.5) * sy + rng.uniform(-jit, jit),
-            z_lo + (k + 0.5) * sz + rng.uniform(-jit, jit),
-        ])
-        core_mols.append((sp, list(tpl.names), coords + centre))
+        base = np.array([(i + 0.5) * sx, (j + 0.5) * sy, z_lo + (k + 0.5) * sz])
+        tree = cKDTree(placed) if len(placed) else None
+        best, best_min = None, -1.0
+        for _ in range(tries):
+            coords = tpl.randomly_rotated(rng) + base + rng.uniform(-jit, jit, 3)
+            if tree is None:
+                best = coords
+                break
+            mind = float(tree.query(coords, k=1)[0].min())
+            if mind > best_min:
+                best_min, best = mind, coords
+            if mind >= accept:
+                break
+        core_mols.append((sp, list(tpl.names), best))
+        placed = np.vstack([placed, best]).astype(np.float32)
 
     # group by species in file order so [ molecules ] stays contiguous per type
     species_order = list(core.keys())
@@ -171,6 +212,71 @@ def insert_core_into_bilayer(
         relaxed = np.vstack([m[2] for m in mols])
         ld.atoms[np.concatenate(idx)].positions = relaxed
     return ld
+
+
+def _write_single_molecule(tpl, path):
+    """Write one template molecule to a .gro (for gmx insert-molecules)."""
+    n = tpl.n_atoms
+    m = mda.Universe.empty(n, n_residues=1, atom_resindex=np.zeros(n, int),
+                           trajectory=True)
+    m.add_TopologyAttr("names", list(tpl.names))
+    m.add_TopologyAttr("resnames", [tpl.resname])
+    m.add_TopologyAttr("resids", [1])
+    m.atoms.positions = tpl.positions
+    m.dimensions = [60, 60, 60, 90, 90, 90]
+    m.atoms.write(path)
+
+
+def _pack_core_gmx(u_gapped, core, templates, scale=0.5, tries=2000):
+    """Pack the core with ``gmx insert-molecules`` (VdW no-overlap guarantee).
+
+    Rigid sterols (CHYO) interlock under grid placement; insert-molecules packs
+    them with a real overlap check.  Requires ``gmx`` on PATH.  Returns core
+    molecules as ``(resname, names, coords)`` tuples grouped by species.
+    """
+    gmx = shutil.which("gmx") or shutil.which("gmx_mpi")
+    if gmx is None:
+        raise RuntimeError(
+            "mixed / CHYO cores are packed with 'gmx insert-molecules', but no "
+            "'gmx' executable is on PATH. Run where GROMACS is available, or use "
+            "method='grid' (single-species TRIO cores only).")
+    tmp = tempfile.mkdtemp(prefix="ldmaker_")
+    try:
+        current = os.path.join(tmp, "gapped.gro")
+        u_gapped.atoms.write(current)
+        for sp, n in core.items():
+            ci = os.path.join(tmp, f"{sp}.gro")
+            _write_single_molecule(templates[sp], ci)
+            out = os.path.join(tmp, f"ins_{sp}.gro")
+            r = subprocess.run(
+                [gmx, "insert-molecules", "-f", current, "-ci", ci,
+                 "-nmol", str(n), "-o", out, "-try", str(tries),
+                 "-scale", str(scale)],
+                capture_output=True, text=True)
+            added = _parse_added(r.stderr + r.stdout)
+            if added < n:
+                raise RuntimeError(
+                    f"gmx insert-molecules placed only {added}/{n} {sp}; "
+                    f"open a larger gap (lower packing_fraction) or reduce --scale.")
+            current = out
+
+        packed = mda.Universe(current)
+        core_ag = packed.atoms[u_gapped.atoms.n_atoms:]   # inserted atoms only
+        core_mols, i = [], 0
+        for sp, n in core.items():
+            na = templates[sp].n_atoms
+            for _ in range(n):
+                at = core_ag.atoms[i:i + na]
+                core_mols.append((sp, list(at.names), at.positions.copy()))
+                i += na
+        return core_mols
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _parse_added(text):
+    matches = re.findall(r"Added\s+(\d+)\s+molecules", text)
+    return int(matches[-1]) if matches else 0
 
 
 def _merge_bilayer_and_core(u, core_mols, box, t):
