@@ -235,6 +235,19 @@
   </section>
 
   <section>
+    <p class="eyebrow">Different droplet types</p>
+    <h2>Mix the core: triglyceride + cholesteryl ester.</h2>
+    <p class="lead">Real lipid droplets aren't pure triacylglycerol — they carry cholesteryl esters. Pass a core composition and the species are placed interleaved through the core, with a topology that stays contiguous per type.</p>
+    <div class="code"><pre><span class="c"># 120 triolein + 30 cholesteryl oleate — a mixed TG/CE core</span>
+<span class="k">python</span> -m ld_maker --bilayer <span class="v">bil.gro</span> --core <span class="v">"TRIO:120,CHYO:30"</span> --out <span class="v">runs/ld_ce</span></pre></div>
+    <div class="figure">
+      <img src="img/mixed_core.png" alt="Cross-section of a lipid droplet with a mixed TRIO/CHYO core." style="width:100%;height:auto;display:block;border-radius:12px;background:#fff">
+      <div class="cap">A 120:30 TRIO:CHYO core — triolein (orange) and cholesteryl oleate (magenta) interleaved between the phospholipid monolayers. CHYO ships as a packaged template, so <code>--core</code> needs no extra files.</div>
+    </div>
+    <div class="note" style="margin-top:.4rem"><strong>Monolayer composition</strong> comes from the bilayer you feed in: build a mixed-phospholipid or cholesterol-containing bilayer in CHARMM-GUI and it carries straight through — no tool change needed.</div>
+  </section>
+
+  <section>
     <p class="eyebrow">Quick start</p>
     <h2>One command, start to finish.</h2>
     <p>Build the droplet, stage a self-contained run directory (coordinates, topology, index, protocol, force field), and minimize:</p>
