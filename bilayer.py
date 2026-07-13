@@ -16,14 +16,28 @@ PL monolayer, ready for the standard minimization + equilibration pipeline.
                                    ~~~~~~~~~~~~   monolayer
 """
 
+import os
+
 import numpy as np
 import MDAnalysis as mda
 
 from .templates import extract_templates
 from .relax import relax_clashes
 
+# packaged single-molecule core templates (one TRIO + one CHYO), so mixed
+# cores work without pointing at an external structure
+DEFAULT_CORE_SOURCE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "templates", "core_templates.gro")
+
 # approximate molecular volume of triolein (g/mol 885, rho ~0.91 g/cm^3)
 TRIO_VOLUME_A3 = 1630.0
+
+# approximate molecular volumes (A^3) of neutral-lipid core species,
+# used only to size the initial core gap (NPT then sets the real density)
+CORE_VOLUME_A3 = {"TRIO": 1630.0, "CHYO": 1180.0}
+
+# resname -> topology include filename, where it differs from "<RESNAME>.itp"
+ITP_FILENAME = {"CHYO": "chyo.itp"}
 
 
 def _leaflet_split_z(universe, head_name="P"):
@@ -36,8 +50,8 @@ def _leaflet_split_z(universe, head_name="P"):
 
 def insert_core_into_bilayer(
     bilayer,
-    n_trio,
-    trio_source="modules/run.gro",
+    core,
+    core_source=None,
     core_thickness=None,
     packing_fraction=0.35,
     head_name="P",
@@ -45,33 +59,44 @@ def insert_core_into_bilayer(
     relax=True,
     d_min=1.6,
 ):
-    """Insert ``n_trio`` TRIO molecules into a bilayer's midplane.
+    """Insert a neutral-lipid core between a bilayer's leaflets.
 
     Parameters
     ----------
     bilayer : str or mda.Universe
         A solvated phospholipid bilayer (e.g. a CHARMM-GUI ``.gro``).
-    n_trio : int
-        Number of TRIO molecules to insert (the oil core).
-    trio_source : str or mda.Universe
-        Structure to take a single TRIO template from (must contain TRIO).
+    core : int or dict
+        The core composition.  An int is shorthand for ``{"TRIO": int}``.
+        A dict mixes species, e.g. ``{"TRIO": 120, "CHYO": 30}`` for a
+        triolein / cholesteryl-ester droplet.
+    core_source : str or mda.Universe
+        Structure to take single-molecule templates from; must contain every
+        species named in ``core`` (e.g. a 50:50 TRIO/CHYO system for CHYO).
     core_thickness : float or None
         Thickness of the inserted core slab in angstrom.  If ``None`` it is
-        derived from ``n_trio`` and the box area via ``packing_fraction``.
+        derived from the composition and box area via ``packing_fraction``.
     packing_fraction : float
         Target initial fill of the core (0-1).  Lower = looser start = safer
         minimization; NPT then compresses the box to the real density.
     head_name : str
         Atom name marking phospholipid head groups (``P`` for PC/PE/PI/PS/PG).
     relax : bool
-        Optional rigid-body clash relaxation after insertion.  Usually
-        unnecessary — the loose core + GROMACS minimization handle contacts.
+        Optional rigid-body clash relaxation after insertion.
 
     Returns
     -------
     mda.Universe
-        The LD system (bilayer + TRIO core), box extended along z.
+        The LD system (bilayer + neutral-lipid core), box extended along z.
     """
+    if isinstance(core, (int, np.integer)):
+        core = {"TRIO": int(core)}
+    core = {k: int(v) for k, v in core.items() if int(v) > 0}
+    if not core:
+        raise ValueError("core must name at least one species, e.g. {'TRIO': 150}")
+    n_total = sum(core.values())
+    if core_source is None:
+        core_source = DEFAULT_CORE_SOURCE
+
     u = bilayer if isinstance(bilayer, mda.Universe) else mda.Universe(bilayer)
     # make molecules whole and inside the box so leaflet/water assignment is clean
     u.atoms.wrap(compound="residues")
@@ -81,7 +106,8 @@ def insert_core_into_bilayer(
     center = _leaflet_split_z(u, head_name)
 
     if core_thickness is None:
-        core_thickness = n_trio * TRIO_VOLUME_A3 / (area * packing_fraction)
+        vol = sum(n * CORE_VOLUME_A3.get(sp, TRIO_VOLUME_A3) for sp, n in core.items())
+        core_thickness = vol / (area * packing_fraction)
     t = float(core_thickness)
 
     # --- assign every residue to the top or bottom half by its COM z, then
@@ -93,33 +119,45 @@ def insert_core_into_bilayer(
     top_atoms.positions += np.array([0.0, 0.0, +t / 2.0])
     bot_atoms.positions += np.array([0.0, 0.0, -t / 2.0])
 
-    # --- place TRIO on a jittered 3-D grid in the vacated gap ---
-    trio = extract_templates(trio_source, ["TRIO"], align_axis=True)["TRIO"]
+    # --- place the core species on a shared jittered 3-D grid in the gap ---
+    templates = extract_templates(core_source, list(core.keys()), align_axis=True)
     rng = np.random.default_rng(seed)
-    span = trio.positions.max(axis=0) - trio.positions.min(axis=0)
-    cell = 0.85 * float(max(span[0], span[1]))
+    lateral_span = max(float(max((tpl.positions.max(0) - tpl.positions.min(0))[:2]))
+                       for tpl in templates.values())
+    z_span = max(float((tpl.positions.max(0) - tpl.positions.min(0))[2])
+                 for tpl in templates.values())
+    cell = 0.85 * lateral_span
     nx = max(1, int(box[0] // cell))
     ny = max(1, int(box[1] // cell))
-    nz = max(1, int(np.ceil(n_trio / (nx * ny))))
+    nz = max(1, int(np.ceil(n_total / (nx * ny))))
     sx, sy = box[0] / nx, box[1] / ny
-    inset = min(0.30 * t, 0.25 * float(span[2]))
+    inset = min(0.30 * t, 0.25 * z_span)
     z_lo, z_hi = center - t / 2 + inset, center + t / 2 - inset
     sz = (z_hi - z_lo) / nz if nz else 0.0
     jit = 0.2 * min(sx, sy, max(sz, 1.0))
 
+    # interleave the species across grid slots so the mix is spatially uniform
+    species_bag = [sp for sp, n in core.items() for _ in range(n)]
+    rng.shuffle(species_bag)
     slots = [(i, j, k) for k in range(nz) for j in range(ny) for i in range(nx)]
     rng.shuffle(slots)
-    trio_mols = []
-    for (i, j, k) in slots[:n_trio]:
-        coords = trio.randomly_rotated(rng)
+
+    core_mols = []  # (resname, names, coords)
+    for (i, j, k), sp in zip(slots[:n_total], species_bag):
+        tpl = templates[sp]
+        coords = tpl.randomly_rotated(rng)
         centre = np.array([
             (i + 0.5) * sx + rng.uniform(-jit, jit),
             (j + 0.5) * sy + rng.uniform(-jit, jit),
             z_lo + (k + 0.5) * sz + rng.uniform(-jit, jit),
         ])
-        trio_mols.append(coords + centre)
+        core_mols.append((sp, list(tpl.names), coords + centre))
 
-    ld = _merge_bilayer_and_core(u, trio, trio_mols, box, t)
+    # group by species in file order so [ molecules ] stays contiguous per type
+    species_order = list(core.keys())
+    core_mols.sort(key=lambda m: species_order.index(m[0]))
+
+    ld = _merge_bilayer_and_core(u, core_mols, box, t)
 
     # recenter so the core (originally at `center`) sits at the new box midplane,
     # keeping the whole system inside [0, box_z] with symmetric water slabs
@@ -135,27 +173,29 @@ def insert_core_into_bilayer(
     return ld
 
 
-def _merge_bilayer_and_core(u, trio_tpl, trio_mols, box, t):
-    """Combine the shifted bilayer with the TRIO molecules into one Universe."""
-    n_trio = len(trio_mols)
-    trio_natoms = trio_tpl.n_atoms
-    total = u.atoms.n_atoms + n_trio * trio_natoms
+def _merge_bilayer_and_core(u, core_mols, box, t):
+    """Combine the shifted bilayer with the inserted core molecules.
 
-    n_res = u.residues.n_residues + n_trio
-    # residue atom-count array: existing residues then TRIO residues
-    exist_counts = [r.atoms.n_atoms for r in u.residues]
-    counts = exist_counts + [trio_natoms] * n_trio
+    ``core_mols`` is a list of ``(resname, names, coords)`` tuples, already
+    grouped by species so [ molecules ] stays contiguous.
+    """
+    n_core = len(core_mols)
+    core_counts = [len(names) for _, names, _ in core_mols]
+    total = u.atoms.n_atoms + sum(core_counts)
+
+    n_res = u.residues.n_residues + n_core
+    counts = [r.atoms.n_atoms for r in u.residues] + core_counts
     atom_resindex = np.repeat(np.arange(n_res), counts)
 
     new = mda.Universe.empty(n_atoms=total, n_residues=n_res,
                              atom_resindex=atom_resindex, trajectory=True)
-    new.add_TopologyAttr("names",
-                         list(u.atoms.names) + list(trio_tpl.names) * n_trio)
+    core_names = [nm for _, names, _ in core_mols for nm in names]
+    new.add_TopologyAttr("names", list(u.atoms.names) + core_names)
     new.add_TopologyAttr("resnames",
-                         list(u.residues.resnames) + ["TRIO"] * n_trio)
+                         list(u.residues.resnames) + [rn for rn, _, _ in core_mols])
     new.add_TopologyAttr("resids", np.arange(1, n_res + 1))
 
-    coords = np.vstack([u.atoms.positions] + trio_mols)
+    coords = np.vstack([u.atoms.positions] + [c for _, _, c in core_mols])
     new.atoms.positions = coords
     box = box.copy()
     box[2] += t                     # grow z to accommodate the core
@@ -188,15 +228,16 @@ def _core_and_lipid_molecules(universe, head_name="P"):
     return mols, idx
 
 
-def bilayer_to_ld(bilayer, n_trio, out_gro=None, out_top=None,
-                  trio_source="modules/run.gro", toppar_includes=None, **kwargs):
+def bilayer_to_ld(bilayer, core, out_gro=None, out_top=None,
+                  core_source=None, toppar_includes=None, **kwargs):
     """Build an LD from a bilayer and (optionally) write .gro + .top.
 
+    ``core`` is an int (TRIO only) or a dict, e.g. ``{"TRIO": 120, "CHYO": 30}``.
     Extra keyword arguments are passed to :func:`insert_core_into_bilayer`
     (``core_thickness``, ``packing_fraction``, ``seed``, ``relax`` ...).
     Returns the resulting Universe.
     """
-    ld = insert_core_into_bilayer(bilayer, n_trio, trio_source=trio_source, **kwargs)
+    ld = insert_core_into_bilayer(bilayer, core, core_source=core_source, **kwargs)
     if out_gro:
         ld.atoms.write(out_gro)
     if out_top:
@@ -213,7 +254,7 @@ def _write_top(universe, path, includes=None, system_name="Lipid droplet (bilaye
                  "TRIO", "CHYO", "SOD", "CLA", "POT", "TIP3"]
         present = [r for r in order if r in set(universe.residues.resnames)]
         includes = ["toppar/charmm36-mar2019.ff/forcefield.itp"] + \
-                   [f"toppar/{r}.itp" for r in present]
+                   [f"toppar/{ITP_FILENAME.get(r, r + '.itp')}" for r in present]
     with open(path, "w") as fh:
         for inc in includes:
             fh.write(f'#include "{inc}"\n')

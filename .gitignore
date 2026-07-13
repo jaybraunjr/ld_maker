@@ -31,3 +31,6 @@ temp.top*
 
 # Keep the documentation figures
 !docs/img/*.png
+
+# Keep the packaged single-molecule core templates
+!templates/*.gro

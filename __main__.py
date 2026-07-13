@@ -32,8 +32,14 @@ def main(argv=None):
     p.add_argument("--bilayer", default=None,
                    help="BILAYER MODE: path to a solvated phospholipid bilayer .gro; "
                         "inserts a TRIO core between its leaflets (reuses its water/ions)")
-    p.add_argument("--trio-source", default="modules/run.gro",
-                   help="bilayer mode: structure to take the TRIO template from")
+    p.add_argument("--core", default=None,
+                   help="bilayer mode: mixed core composition, e.g. TRIO:120,CHYO:30 "
+                        "(overrides --n-trio; needs --core-source containing every species)")
+    p.add_argument("--core-source", default=None,
+                   help="bilayer mode: structure to take core templates from "
+                        "(default: packaged TRIO+CHYO templates; override to use your own)")
+    p.add_argument("--trio-source", default=None,
+                   help="bilayer mode: alias of --core-source (kept for compatibility)")
     p.add_argument("--packing-fraction", type=float, default=0.35,
                    help="bilayer mode: initial core fill (looser = safer minimization)")
     p.add_argument("--reference", default=None,
@@ -55,12 +61,17 @@ def main(argv=None):
     gro, top = f"{args.out}.gro", f"{args.out}.top"
 
     if args.bilayer:
-        # --- bilayer -> LD: insert TRIO between the leaflets ---
+        # --- bilayer -> LD: insert a neutral-lipid core between the leaflets ---
         core_t = args.core_thickness if args.core_thickness != 40.0 else None
-        print(f"[ld_maker] bilayer mode: inserting {args.n_trio} TRIO into {args.bilayer}")
+        if args.core:
+            core = {n: int(w) for n, w in _parse_composition(args.core).items()}
+        else:
+            core = {"TRIO": args.n_trio}
+        core_source = args.core_source or args.trio_source
+        print(f"[ld_maker] bilayer mode: inserting core {core} into {args.bilayer}")
         u = bilayer_to_ld(
-            args.bilayer, n_trio=args.n_trio, out_gro=gro, out_top=top,
-            trio_source=args.trio_source, core_thickness=core_t,
+            args.bilayer, core=core, out_gro=gro, out_top=top,
+            core_source=core_source, core_thickness=core_t,
             packing_fraction=args.packing_fraction, seed=args.seed,
             relax=not args.no_relax, d_min=args.d_min,
         )
