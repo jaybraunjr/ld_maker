@@ -248,6 +248,19 @@
   </section>
 
   <section>
+    <p class="eyebrow">Leaflet composition</p>
+    <h2>Swap lipids in the monolayers.</h2>
+    <p class="lead">Replace a fraction of one leaflet lipid with another, in place — for instance a surface cholesteryl-ester model with half the POPC swapped for CHYO. Each replacement lands where a lipid was, split evenly across both leaflets and flipped to the leaflet normal.</p>
+    <div class="code"><pre><span class="c"># swap half the leaflet POPC for cholesteryl oleate</span>
+<span class="k">python</span> -m ld_maker --bilayer <span class="v">bil.gro</span> --replace <span class="v">"POPC:CHYO:0.5"</span> --out <span class="v">runs/surface_ce</span></pre></div>
+    <div class="figure">
+      <img src="img/surface_chyo.png" alt="Bilayer with half the POPC replaced by CHYO in the leaflets." style="width:100%;height:auto;display:block;border-radius:12px;background:#fff">
+      <div class="cap">Half the POPC (blue) swapped for CHYO (magenta) in the leaflets, alongside DOPE (green) — minimizes cleanly. A starting structure: minimize + equilibrate to settle sterol depth and tilt.</div>
+    </div>
+    <div class="note" style="margin-top:.4rem">Here CHYO is a <em>membrane</em> lipid, not core, so build the index with <code>--membrane=CHYO</code> to keep the thermostat groups physically correct.</div>
+  </section>
+
+  <section>
     <p class="eyebrow">Quick start</p>
     <h2>One command, start to finish.</h2>
     <p>Build the droplet, stage a self-contained run directory (coordinates, topology, index, protocol, force field), and minimize:</p>
