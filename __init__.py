@@ -15,7 +15,7 @@ Quick start
 
 from .templates import Template, extract_templates
 from .builder import PlanarLDBuilder, build_from_reference
-from .bilayer import insert_core_into_bilayer, bilayer_to_ld
+from .bilayer import insert_core_into_bilayer, bilayer_to_ld, replace_lipid
 from .topology import molecule_counts, molecules_section, write_top
 
 __all__ = [
@@ -25,6 +25,7 @@ __all__ = [
     "build_from_reference",
     "insert_core_into_bilayer",
     "bilayer_to_ld",
+    "replace_lipid",
     "molecule_counts",
     "molecules_section",
     "write_top",

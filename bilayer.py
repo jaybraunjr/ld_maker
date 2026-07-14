@@ -367,3 +367,75 @@ def _write_top(universe, path, includes=None, system_name="Lipid droplet (bilaye
         fh.write(f"\n[ system ]\n{system_name}\n\n")
         fh.write(molecules_section(universe))
     return path
+
+
+def replace_lipid(bilayer, replacements, source=None, head_name="P", seed=0,
+                  out_gro=None, out_top=None, toppar_includes=None):
+    """Substitute a fraction of a leaflet lipid for another, in place.
+
+    For each ``old -> (new, fraction)`` the requested fraction of ``old``
+    residues (split evenly between the two leaflets) is removed and a ``new``
+    molecule placed at each vacated position, aligned to the membrane normal
+    (flipped for the lower leaflet).  E.g. a surface cholesteryl-ester model:
+
+        replace_lipid(bil, {"POPC": ("CHYO", 0.5)})
+
+    The raw build has rough orientations/depth; minimize + equilibrate to settle.
+    Returns the resulting Universe.
+    """
+    u = bilayer if isinstance(bilayer, mda.Universe) else mda.Universe(bilayer)
+    u.atoms.wrap(compound="residues")
+    center = _leaflet_split_z(u, head_name)
+    if source is None:
+        source = DEFAULT_CORE_SOURCE
+    rng = np.random.default_rng(seed)
+
+    new_species = sorted({new for new, _ in replacements.values()})
+    templates = extract_templates(source, new_species, align_axis=True)
+
+    remove_ix, added = set(), []          # added: (resname, names, coords)
+    for old, (new, frac) in replacements.items():
+        res = u.select_atoms(f"resname {old}").residues
+        up = [r for r in res if r.atoms.center_of_mass()[2] >= center]
+        dn = [r for r in res if r.atoms.center_of_mass()[2] < center]
+        rng.shuffle(up)
+        rng.shuffle(dn)
+        tpl = templates[new]
+        ctpl = tpl.positions - tpl.positions.mean(axis=0)
+        names = list(tpl.names)
+        for pool, flip in ((up[:int(round(len(up) * frac))], False),
+                           (dn[:int(round(len(dn) * frac))], True)):
+            for r in pool:
+                remove_ix.add(r.resindex)
+                c = ctpl * [1, 1, -1] if flip else ctpl
+                added.append((new, names, c + r.atoms.center_of_mass()))
+
+    keep = u.atoms[[a.index for a in u.atoms if a.resindex not in remove_ix]]
+    added.sort(key=lambda m: new_species.index(m[0]))   # contiguous per species
+    ld = _assemble(keep, added, u.dimensions)
+
+    if out_gro:
+        ld.atoms.write(out_gro)
+    if out_top:
+        _write_top(ld, out_top, toppar_includes,
+                   system_name="Bilayer with substituted lipids")
+    return ld
+
+
+def _assemble(keep, extra_mols, box):
+    """Combine a kept AtomGroup with appended (resname, names, coords) molecules."""
+    extra_counts = [len(names) for _, names, _ in extra_mols]
+    total = keep.n_atoms + sum(extra_counts)
+    n_res = keep.residues.n_residues + len(extra_mols)
+    counts = [r.atoms.n_atoms for r in keep.residues] + extra_counts
+    new = mda.Universe.empty(total, n_residues=n_res,
+                             atom_resindex=np.repeat(np.arange(n_res), counts),
+                             trajectory=True)
+    new.add_TopologyAttr("names",
+                         list(keep.names) + [nm for _, names, _ in extra_mols for nm in names])
+    new.add_TopologyAttr("resnames",
+                         list(keep.residues.resnames) + [rn for rn, _, _ in extra_mols])
+    new.add_TopologyAttr("resids", np.arange(1, n_res + 1))
+    new.atoms.positions = np.vstack([keep.positions] + [c for _, _, c in extra_mols])
+    new.dimensions = box
+    return new

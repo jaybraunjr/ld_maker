@@ -12,7 +12,7 @@ Example
 import argparse
 
 from .builder import build_from_reference
-from .bilayer import bilayer_to_ld
+from .bilayer import bilayer_to_ld, replace_lipid
 from .topology import write_top
 
 
@@ -32,6 +32,9 @@ def main(argv=None):
     p.add_argument("--bilayer", default=None,
                    help="BILAYER MODE: path to a solvated phospholipid bilayer .gro; "
                         "inserts a TRIO core between its leaflets (reuses its water/ions)")
+    p.add_argument("--replace", default=None,
+                   help="REPLACE MODE (with --bilayer): substitute a leaflet lipid, "
+                        "e.g. POPC:CHYO:0.5 to swap half the POPC for CHYO in place")
     p.add_argument("--core", default=None,
                    help="bilayer mode: mixed core composition, e.g. TRIO:120,CHYO:30 "
                         "(overrides --n-trio; needs --core-source containing every species)")
@@ -60,7 +63,15 @@ def main(argv=None):
 
     gro, top = f"{args.out}.gro", f"{args.out}.top"
 
-    if args.bilayer:
+    if args.bilayer and args.replace:
+        # --- replace mode: substitute a leaflet lipid in place ---
+        reps = {}
+        for spec in args.replace.split(";"):
+            old, new, frac = spec.split(":")
+            reps[old.strip()] = (new.strip(), float(frac))
+        print(f"[ld_maker] replace mode: {reps} in {args.bilayer}")
+        u = replace_lipid(args.bilayer, reps, out_gro=gro, out_top=top, seed=args.seed)
+    elif args.bilayer:
         # --- bilayer -> LD: insert a neutral-lipid core between the leaflets ---
         core_t = args.core_thickness if args.core_thickness != 40.0 else None
         if args.core:

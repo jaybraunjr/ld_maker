@@ -20,12 +20,19 @@ PHOSPHOLIPIDS = ["POPC", "DOPE", "SAPI", "POPE", "POPG", "POPS", "PSM", "CHL1"]
 SOLVENT = ["TIP3", "SOL", "SOD", "CLA", "POT", "K", "NA"]
 
 
-def group_definitions(universe):
+def group_definitions(universe, membrane_extra=()):
     """Return an ordered dict of group-name -> MDAnalysis selection string,
-    including only residue kinds actually present."""
+    including only residue kinds actually present.
+
+    ``membrane_extra`` forces resnames into MEMB (and out of the core SOLU
+    group) -- use it for surface cholesteryl ester, where CHYO is a membrane
+    lipid rather than a core lipid.
+    """
     present = set(universe.residues.resnames)
-    core = [r for r in CORE if r in present]
-    memb = [r for r in PHOSPHOLIPIDS if r in present]
+    extra = set(membrane_extra)
+    core = [r for r in CORE if r in present and r not in extra]
+    memb = [r for r in PHOSPHOLIPIDS if r in present] + \
+           [r for r in extra if r in present]
     solv = [r for r in SOLVENT if r in present]
     sel = lambda names: "resname " + " ".join(names) if names else "resid -1"
     return {
@@ -37,10 +44,13 @@ def group_definitions(universe):
     }
 
 
-def write_index_ndx(structure, path):
-    """Write ``path`` (index.ndx) for ``structure`` (a .gro path or Universe)."""
+def write_index_ndx(structure, path, membrane_extra=()):
+    """Write ``path`` (index.ndx) for ``structure`` (a .gro path or Universe).
+
+    ``membrane_extra`` forces resnames (e.g. surface ``CHYO``) into MEMB.
+    """
     u = structure if isinstance(structure, mda.Universe) else mda.Universe(structure)
-    groups = group_definitions(u)
+    groups = group_definitions(u, membrane_extra=membrane_extra)
     with open(path, "w") as fh:
         for name, selection in groups.items():
             idx = u.select_atoms(selection).indices + 1        # 1-based for GROMACS
@@ -51,9 +61,15 @@ def write_index_ndx(structure, path):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("usage: python -m ld_maker.index <structure.gro> <index.ndx>")
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    membrane = ()
+    for a in sys.argv[1:]:
+        if a.startswith("--membrane="):
+            membrane = tuple(a.split("=", 1)[1].split(","))
+    if len(args) != 2:
+        print("usage: python -m ld_maker.index <structure.gro> <index.ndx> "
+              "[--membrane=CHYO,...]")
         raise SystemExit(1)
-    counts = write_index_ndx(sys.argv[1], sys.argv[2])
+    counts = write_index_ndx(args[0], args[1], membrane_extra=membrane)
     for name, n in counts.items():
         print(f"  {name:10s} {n}")
