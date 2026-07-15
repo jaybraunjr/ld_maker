@@ -80,6 +80,16 @@ bash pipeline.sh bil.gro 150 runs/ld1 --minimize
 cd runs/ld1 && sbatch run_equil.slurm      # or: bash run_equil.sh
 ```
 
+For the **whole run in one shot** — build the LD from a bilayer, then EM →
+equilibration → NPT production:
+
+```bash
+bash equil/run_ld.sh bil.gro runs/ld1 150      # BILAYER OUTDIR N_TRIO [CHYO_FRAC]
+```
+Pass a CHYO/DOPE/POPC bilayer (CHYO in the leaflets) with `CHYO_FRAC=0`; the
+script inserts the TRIO core and runs `step6.0` → `step6.6` → `step7`. (In-place
+`CHYO_FRAC>0` over-packs the leaflet — build that composition in CHARMM-GUI.)
+
 Generate the thermostat/restraint index directly with
 `python -m ld_maker.index system.gro index.ndx [--membrane=CHYO]`
 (`--membrane` keeps *surface* CHYO in `MEMB` rather than the core `SOLU` group).
