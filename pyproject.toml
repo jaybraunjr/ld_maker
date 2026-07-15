@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ld_maker"
+version = "0.1.0"
+description = "Build lipid-droplet starting structures for GROMACS/CHARMM36 MD"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "jaybraunjr" }]
+keywords = ["molecular-dynamics", "lipid-droplet", "gromacs", "charmm36", "mdanalysis"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Intended Audience :: Science/Research",
+]
+dependencies = [
+    "numpy>=1.21",
+    "scipy>=1.7",
+    "MDAnalysis>=2.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.scripts]
+ld_maker = "ld_maker.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/jaybraunjr/ld_maker"
+Documentation = "https://jaybraunjr.github.io/ld_maker/"
+
+[tool.setuptools]
+packages = ["ld_maker"]
+
+[tool.setuptools.package-dir]
+ld_maker = "."
+
+[tool.setuptools.package-data]
+ld_maker = ["templates/*.gro", "equil/*.mdp", "equil/*.sh", "equil/*.slurm"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

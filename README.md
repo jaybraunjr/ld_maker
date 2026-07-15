@@ -1,111 +1,117 @@
-# ld_maker — planar lipid-droplet builder
+# ld_maker
 
-Builds a **planar LD starting structure**: a neutral-lipid **TRIO** core sandwiched
-between two **phospholipid leaflets** (POPC / DOPE / SAPI) whose head groups face
-outward — the flat "trilayer" model used throughout this project.
+[![tests](https://github.com/jaybraunjr/ld_maker/actions/workflows/ci.yml/badge.svg)](https://github.com/jaybraunjr/ld_maker/actions/workflows/ci.yml)
 
-Molecules are stamped onto grids using single-molecule templates taken straight
-from one of your own equilibrated structures (e.g. `modules/run.gro`), so the
-conformations are physical and no external tools (Packmol, CHARMM-GUI) are needed.
-A rigid-body clash relaxation then nudges molecules apart until the structure is
-safe to minimise in GROMACS.
+Build **lipid-droplet starting structures** for GROMACS / CHARMM36 molecular
+dynamics. An LD is a neutral-lipid core (TRIO ± cholesteryl ester) wrapped by two
+phospholipid monolayers; `ld_maker` builds that geometry and hands off to the
+standard six-stage CHARMM-GUI equilibration.
 
-## Install / requirements
-Pure Python; needs only `MDAnalysis` and `numpy` (already in this env).
+Templates come straight from your own equilibrated structures, so conformations
+are physical and no external builder is required for the common cases. Docs:
+**https://jaybraunjr.github.io/ld_maker/**
 
-## Two ways to build
-
-### 1. Bilayer → LD (recommended): insert TRIO into a real bilayer
-Start from a solvated CHARMM-GUI phospholipid bilayer, pry the leaflets apart, and
-fill the midplane with TRIO. The bilayer's water/ions are kept as-is. **Composition
--agnostic** — whatever lipids/sterols (cholesterol, mixed PLs) are in the bilayer
-just carry through, so build exotic compositions in CHARMM-GUI and convert here.
+## Install
 
 ```bash
-python -m ld_maker \
-    --bilayer modules/move_prot/drude/bil/bil.gro \
-    --n-trio 150 \
-    --trio-source modules/run.gro \
-    --out bil2ld
+pip install -e .            # from the repo root
+# or with test deps:
+pip install -e ".[test]"
 ```
-Options: `--packing-fraction` (initial core fill, lower = looser/safer start that
-NPT compresses; default 0.35), `--core-thickness` (override the auto-sized gap),
-`--no-relax`, `--seed`. Python: `ld_maker.bilayer_to_ld(...)`.
+Requires Python ≥3.9, `numpy`, `scipy`, `MDAnalysis`. The mixed-core and
+lipid-replacement packing steps additionally call `gmx` (GROMACS) if it is on
+`PATH`; everything else is pure Python.
 
-### 2. From-scratch grid build
-Synthesize the whole PL/TRIO/PL sandwich on a grid from single-molecule templates
-(no bilayer needed; produces lipids+core only, solvate downstream).
+## What it builds
+
+### 1. Bilayer → LD  (recommended)
+Take a solvated CHARMM-GUI bilayer, pry the leaflets apart, and fill the midplane
+with neutral lipid. The bilayer's water and ions are kept as-is.
 
 ```bash
-python -m ld_maker \
-    --reference modules/run.gro \
-    --nx 12 --ny 12 \
-    --n-trio 200 \
-    --composition POPC:176,DOPE:74,SAPI:20 \
-    --core-thickness 40 \
-    --water 15 \
-    --out planar_ld
-```
-Writes `<out>.gro` (coordinates) and `<out>.top` (GROMACS `[ molecules ]` section,
-with CHARMM36 `#include`s pointing at `toppar/`).
+# pure triolein core
+python -m ld_maker --bilayer bil.gro --n-trio 150 --out runs/ld
 
-Key options: `--apl` target area per phospholipid (Å²), `--d-min` minimum
-inter-molecular contact target for relaxation (Å), `--no-relax` to skip
-relaxation (fast but clashy), `--seed` for reproducibility.
+# mixed triolein / cholesteryl-ester core (packed with gmx insert-molecules)
+python -m ld_maker --bilayer bil.gro --core "TRIO:120,CHYO:30" --out runs/ld_ce
+```
+Composition-agnostic: whatever lipids/sterols are in the bilayer carry through, so
+build exotic monolayers in CHARMM-GUI and convert here.
+
+### 2. Swap lipids in the leaflets
+Replace a fraction of a leaflet lipid with another in place — e.g. a surface
+cholesteryl-ester model.
+
+```bash
+python -m ld_maker --bilayer bil.gro --replace "POPC:CHYO:0.5" --out runs/surface_ce
+```
+Bulky substitutions over-pack the leaflet; `ld_maker` warns when the result would
+blow up minimization (see Limitations).
+
+### 3. From-scratch grid build
+Synthesize the whole PL / core / PL slab on a grid (lipids + core only; solvate
+downstream).
+
+```bash
+python -m ld_maker --reference run.gro --nx 12 --ny 12 --n-trio 200 \
+    --composition POPC:176,DOPE:74,SAPI:20 --out runs/planar
+```
+
+Each mode writes `<out>.gro` and `<out>.top` (CHARMM36 `#include`s + a
+`[ molecules ]` section counted in file order).
 
 ## Python API
-```python
-from ld_maker import build_from_reference, write_top
 
-u = build_from_reference(
-    "modules/run.gro",
-    nx=12, ny=12, n_trio=200,
-    pl_composition={"POPC": 176, "DOPE": 74, "SAPI": 20},
-    core_thickness=40.0, water_thickness=15.0,
-)
-u.atoms.write("planar_ld.gro")
-write_top(u, "planar_ld.top")
+```python
+from ld_maker import bilayer_to_ld, replace_lipid, build_from_reference
+
+bilayer_to_ld("bil.gro", core={"TRIO": 120, "CHYO": 30}, out_gro="ld.gro", out_top="ld.top")
+replace_lipid("bil.gro", {"POPC": ("CHYO", 0.5)}, out_gro="ce.gro", out_top="ce.top")
 ```
 
-For finer control, use the classes directly:
-```python
-from ld_maker import extract_templates, PlanarLDBuilder
-templates = extract_templates("modules/run.gro", ["POPC", "DOPE", "SAPI", "TRIO"])
-builder = PlanarLDBuilder(templates, apl=65.0, seed=0)
-u = builder.build(nx=12, ny=12, n_trio=200,
-                  pl_composition={"POPC": 176, "DOPE": 74, "SAPI": 20})
+## End-to-end pipeline
+
+`pipeline.sh` builds, stages a self-contained run directory (coordinates,
+topology, `index.ndx`, CHARMM36 `toppar`, `step6/step7` `.mdp`s), and optionally
+minimizes:
+
+```bash
+bash pipeline.sh bil.gro 150 runs/ld1 --minimize
+cd runs/ld1 && sbatch run_equil.slurm      # or: bash run_equil.sh
 ```
 
-## What the geometry looks like
-- Leaflet lipids: `nx * ny` per leaflet, heads pointing outward (+z top, −z bottom).
-- Core: `n_trio` TRIO on a jittered 3-D grid between the leaflet tail regions.
-- `water_thickness`: empty pad added above and below for you to **solvate**
-  afterward (e.g. `gmx solvate` / add ions). No water or ions are placed here.
+Generate the thermostat/restraint index directly with
+`python -m ld_maker.index system.gro index.ndx [--membrane=CHYO]`
+(`--membrane` keeps *surface* CHYO in `MEMB` rather than the core `SOLU` group).
 
-Validate with `validation_zprofile.png` (regenerate any time): two phospholipid
-head-group peaks at the outer surfaces with the TRIO core between them.
+## Tests
 
-## Recommended downstream workflow (GROMACS)
-1. `gmx editconf` if you need to adjust the box / add vacuum for solvation.
-2. `gmx solvate` to add TIP3 water in the pads; then add SOD/CLA ions.
-3. Update the `[ molecules ]` counts in the `.top` for added water/ions.
-4. **Energy minimise** (steepest descent) before any MD — the build is a grid
-   start; minimisation removes residual close contacts.
-5. Equilibrate (NVT then NPT with semi-isotropic pressure coupling); the box
-   compresses from the relaxed grid to the target density.
+```bash
+pytest -q
+```
+Fast, synthetic fixtures (no large files). Tests that need GROMACS skip
+automatically when `gmx` isn't installed. CI runs the suite on Python 3.9/3.11/3.12.
 
-## Files
+## Package layout
+
 | file | purpose |
 |------|---------|
-| `bilayer.py`   | **bilayer → LD**: insert a TRIO core between a bilayer's leaflets |
+| `bilayer.py`   | bilayer→LD core insertion, mixed cores, `replace_lipid` |
+| `builder.py`   | `PlanarLDBuilder` — from-scratch grid build |
 | `templates.py` | extract compact single-molecule templates from a reference |
-| `builder.py`   | `PlanarLDBuilder` — stamp leaflets + core, set box (grid build) |
 | `relax.py`     | rigid-body clash relaxation |
-| `topology.py`  | GROMACS `[ molecules ]` / `.top` generation (from `make_big`) |
-| `__main__.py`  | command-line interface (`--bilayer` or `--reference` mode) |
+| `topology.py`  | GROMACS `[ molecules ]` / `.top` generation |
+| `index.py`     | SOLU / MEMB / SOLV `index.ndx` generator |
+| `pipeline.sh`  | one-command build → stage → minimize |
+| `equil/`       | CHARMM-GUI `step6/step7` protocol + run scripts |
+| `templates/`   | packaged single-molecule core templates (TRIO, CHYO) |
 
-## Notes & limitations
-- The maker places **lipids + core only**; water and ions are added downstream.
-- Grid + relaxation gives a clash-light start (min contact ≈ target `--d-min`),
-  **not** an equilibrated structure — always minimise first.
-- The reference must contain at least one copy of every requested residue.
+## Limitations
+
+- Output is a **starting structure** — always energy-minimize before MD.
+- Mixed / CHYO cores are packed with `gmx insert-molecules`, which needs a roomy
+  gap (the tool loosens the packing automatically); NPT then compresses to density.
+- `replace_lipid` places the substitute in place. A **high fraction of a bulky
+  lipid** (e.g. 50% CHYO) over-packs a phospholipid leaflet and cannot minimize —
+  the tool warns, and the right route for that density is CHARMM-GUI Membrane
+  Builder with correct per-lipid areas.

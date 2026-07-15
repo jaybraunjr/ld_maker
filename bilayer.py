@@ -21,6 +21,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import warnings
 
 import numpy as np
 import MDAnalysis as mda
@@ -384,6 +385,13 @@ def replace_lipid(bilayer, replacements, source=None, head_name="P", seed=0,
     Returns the resulting Universe.
     """
     u = bilayer if isinstance(bilayer, mda.Universe) else mda.Universe(bilayer)
+    present = set(u.residues.resnames)
+    for old, spec in replacements.items():
+        if old not in present:
+            raise ValueError(f"bilayer has no residue named {old!r} to replace")
+        _, frac = spec
+        if not 0.0 < frac <= 1.0:
+            raise ValueError(f"replacement fraction for {old} must be in (0, 1], got {frac}")
     u.atoms.wrap(compound="residues")
     center = _leaflet_split_z(u, head_name)
     if source is None:
@@ -414,12 +422,33 @@ def replace_lipid(bilayer, replacements, source=None, head_name="P", seed=0,
     added.sort(key=lambda m: new_species.index(m[0]))   # contiguous per species
     ld = _assemble(keep, added, u.dimensions)
 
+    # in-place substitution of a bulkier lipid over-packs the leaflet; warn loudly
+    # rather than hand back a structure that will blow up in minimization
+    mn = _min_inter_contact(ld)
+    if mn < 0.8:
+        warnings.warn(
+            f"replace_lipid: closest inter-molecular contact is {mn:.2f} A -- the "
+            f"leaflet is over-packed and energy minimization will likely blow up. "
+            f"Use a smaller fraction, or build this composition in CHARMM-GUI where "
+            f"the box is sized for the real per-lipid areas.", RuntimeWarning)
+
     if out_gro:
         ld.atoms.write(out_gro)
     if out_top:
         _write_top(ld, out_top, toppar_includes,
                    system_name="Bilayer with substituted lipids")
     return ld
+
+
+def _min_inter_contact(universe, cutoff=1.2):
+    """Closest inter-molecular (different-residue) atom-atom distance, in angstrom."""
+    from MDAnalysis.lib.distances import self_capped_distance
+    pos = universe.atoms.positions.astype(np.float32)
+    ri = universe.atoms.resindices
+    pairs, d = self_capped_distance(pos, max_cutoff=cutoff, box=universe.dimensions,
+                                    return_distances=True)
+    inter = [dd for (a, b), dd in zip(pairs, d) if ri[a] != ri[b]]
+    return float(min(inter)) if inter else float(cutoff)
 
 
 def _assemble(keep, extra_mols, box):
