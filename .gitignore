@@ -34,3 +34,4 @@ temp.top*
 
 # Keep the packaged single-molecule core templates
 !templates/*.gro
+surface_chyo_minimized.png
