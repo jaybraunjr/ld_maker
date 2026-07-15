@@ -59,6 +59,7 @@ def main(argv=None):
     p.add_argument("--no-relax", action="store_true", help="skip clash relaxation (faster, clashy)")
     p.add_argument("--seed", type=int, default=0, help="RNG seed")
     p.add_argument("--out", default="planar_ld", help="output basename (writes .gro and .top)")
+    p.add_argument("--vmd", action="store_true", help="also write a <out>.vmd view script")
     args = p.parse_args(argv)
 
     gro, top = f"{args.out}.gro", f"{args.out}.top"
@@ -103,6 +104,12 @@ def main(argv=None):
 
     print(f"[ld_maker] wrote {gro} ({u.atoms.n_atoms} atoms) and {top}")
     print(f"[ld_maker] box = {u.dimensions[:3].round(1)} A -- minimise in GROMACS before use")
+
+    if args.vmd:
+        from .vmd import write_vmd
+        vmd_path = f"{args.out}.vmd"
+        write_vmd(gro, vmd_path)
+        print(f"[ld_maker] wrote {vmd_path}  (vmd -e {vmd_path})")
 
 
 if __name__ == "__main__":

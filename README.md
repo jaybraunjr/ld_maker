@@ -84,6 +84,20 @@ Generate the thermostat/restraint index directly with
 `python -m ld_maker.index system.gro index.ndx [--membrane=CHYO]`
 (`--membrane` keeps *surface* CHYO in `MEMB` rather than the core `SOLU` group).
 
+## Visualize (VMD)
+
+Every build can emit a `.vmd` view script (`--vmd`), or generate one for any
+structure after the fact:
+
+```bash
+python -m ld_maker --bilayer bil.gro --core "TRIO:120,CHYO:30" --out ld --vmd
+python -m ld_maker.vmd ld.gro -o ld.vmd -t traj.xtc     # + optional trajectory
+vmd -e ld.vmd
+```
+It sets one representation per component present — TRIO core (orange), CHYO
+(purple), POPC/DOPE/SAPI, phosphates (silver spheres), ions, water — and wraps
+the trajectory with PBCTools. `write_vmd(...)` is also available from the API.
+
 ## Tests
 
 ```bash

@@ -17,6 +17,7 @@ from .templates import Template, extract_templates
 from .builder import PlanarLDBuilder, build_from_reference
 from .bilayer import insert_core_into_bilayer, bilayer_to_ld, replace_lipid
 from .topology import molecule_counts, molecules_section, write_top
+from .vmd import write_vmd
 
 __all__ = [
     "Template",
@@ -29,4 +30,5 @@ __all__ = [
     "molecule_counts",
     "molecules_section",
     "write_top",
+    "write_vmd",
 ]
